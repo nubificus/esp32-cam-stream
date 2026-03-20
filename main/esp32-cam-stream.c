@@ -178,6 +178,13 @@ static esp_err_t config_post_handler(httpd_req_t *req) {
 
 static esp_err_t init_camera(void)
 {
+#ifdef CONFIG_IDF_TARGET_ESP32P4
+    /* ESP32-P4 uses a MIPI CSI camera interface, not DVP.
+     * The esp32-camera DVP driver does not support P4.
+     * See ~/develop/esp32-cam-dsi-stream for the CSI/ISP-based implementation. */
+    ESP_LOGW("cam", "P4: DVP camera not supported; CSI interface not yet integrated");
+    return ESP_ERR_NOT_SUPPORTED;
+#else
     camera_config_t camera_config = {
         .pin_pwdn  = CAM_PIN_PWDN,
         .pin_reset = CAM_PIN_RESET,
@@ -213,6 +220,7 @@ static esp_err_t init_camera(void)
         return err;
     }
     return ESP_OK;
+#endif
 }
 
 int frames_captured = 0;
@@ -225,6 +233,14 @@ typedef struct {
 static void stream_task(void *param) {
     stream_handle_t *stream_handle = (stream_handle_t *)param;
     httpd_req_t *req = stream_handle->req;
+#ifdef CONFIG_IDF_TARGET_ESP32P4
+    httpd_resp_send_err(req, HTTPD_501_METHOD_NOT_IMPLEMENTED,
+                        "Camera not available on P4 (CSI not yet integrated)");
+    httpd_req_async_handler_complete(req);
+    free(stream_handle);
+    vTaskDelete(NULL);
+    return;
+#endif
     esp_err_t res = ESP_OK;
     camera_fb_t *fb = NULL;
     size_t _jpg_buf_len = 0;
@@ -500,9 +516,13 @@ void app_main(void)
         ret = init_camera();
         if (ret != ESP_OK)
         {
+#ifndef CONFIG_IDF_TARGET_ESP32P4
             printf("err: %s\n", esp_err_to_name(ret));
             return;
-        }        
+#else
+            ESP_LOGW(TAG, "P4: camera unavailable (CSI not integrated), continuing without camera");
+#endif
+        }
         esp_register_shutdown_handler(mqtt_announce_shutdown);	
 	int task_res = xTaskCreate(mqtt_announce_online, "mqtt_announce", 2048, NULL, 5, NULL);
 	if (task_res != pdPASS) {
